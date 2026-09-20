@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tjtzt92xdju92mmxxjrg.ics
+          git add tjtzt92xdju92mmxxjrg.ics deadline_state.json
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"
             exit 0

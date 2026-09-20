@@ -8,7 +8,15 @@
   3. GET /mooc-ans/mooc2/work/list     -> 作业条目 (workId, 标题, 状态, 剩余时间)
      （旧接口 /mooc-ans/work/getAllWork 已被平台停用，返回"无权限"）
 
-截止时刻 = 抓取时刻 + 剩余时间（列表页只给相对时间，误差约 ±2 分钟）。
+截止时刻 = 抓取时刻 + 剩余时间（列表页只给相对时间，无绝对时刻）。
+
+关于精度（已实测标定）：
+  平台对"剩余 X 小时 Y 分钟"是【四舍五入到分钟】；
+  因此估算也必须四舍五入到整分钟，才能还原真实截止时刻。
+  实测样本：
+    t=21:43:32, R=164h46m -> X=18:29:32 -> 四舍五入 18:30  ✔（真实值 18:30）
+    t=21:44:12, R=164h46m -> X=18:30:12 -> 四舍五入 18:30  ✔
+  另外用 deadline_state.json 做基线固化，避免 ±1 分钟的偶发抖动导致日历反复变动。
 """
 import gzip
 import io
@@ -25,6 +33,8 @@ from pathlib import Path
 from build_ics import DONE_STATUS, build_vevent, render, verify_ics
 
 BASE = Path(__file__).resolve().parent
+STATE = BASE / "deadline_state.json"          # 截止时刻基线（固化，抗抖动）
+TOLERANCE = timedelta(minutes=2).total_seconds()
 
 # 凭据来源：优先环境变量（GitHub Actions Secrets），回落到本地文件（本地调试）
 COOKIE = os.environ.get("UCAS_COOKIE", "").strip()
@@ -109,6 +119,55 @@ def parse_remaining(text):
     return td
 
 
+def round_minute(dt):
+    """四舍五入到整分钟。不能用截断（会单向下偏 1 分钟）。"""
+    if dt.second >= 30:
+        dt += timedelta(minutes=1)
+    return dt.replace(second=0, microsecond=0)
+
+
+def stabilize(works):
+    """用历史基线固化截止时刻，避免 ±1 分钟抖动导致日历反复变动。
+
+    命中基线（差值 <= 2 分钟）-> 沿用旧值；否则采纳新值（截止被真正改动）。
+    返回 (命中数, 更新数, 新增数)。
+    """
+    try:
+        old = json.loads(STATE.read_text(encoding="utf-8"))
+    except Exception:
+        old = {}
+    hit = upd = new = 0
+    for w in works:
+        if not w["deadline"]:
+            continue
+        prev = (old.get(w["work_id"]) or {}).get("deadline")
+        if not prev:
+            w["deadline_source"] = "new"
+            new += 1
+            continue
+        try:
+            delta = abs((datetime.strptime(w["deadline"], "%Y-%m-%d %H:%M")
+                         - datetime.strptime(prev, "%Y-%m-%d %H:%M")).total_seconds())
+        except ValueError:
+            w["deadline_source"] = "new"
+            new += 1
+            continue
+        if delta <= TOLERANCE:
+            w["deadline"] = prev
+            w["deadline_source"] = "baseline"
+            hit += 1
+        else:
+            w["deadline_source"] = "updated"
+            upd += 1
+
+    STATE.write_text(json.dumps(
+        {w["work_id"]: {"title": w["title"], "course": w["course"],
+                        "deadline": w["deadline"]}
+         for w in works if w["deadline"]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    return hit, upd, new
+
+
 def fetch_works(course, now):
     """成功返回作业列表（可能为空列表）；失败返回 None。"""
     cid, cls, cpi, ckenc = course["cid"], course["classid"], course["cpi"], course["ckenc"]
@@ -141,9 +200,8 @@ def fetch_works(course, now):
         title = (tm.group(1) if tm else "").strip()
         status = (sm.group(1) if sm else "").strip()
         remain_raw = (dm.group(1) if dm else "").strip()
-        # 截断到整分钟：列表页只给"小时+分钟"，秒级误差会让每天重算的结果抖动；
-        # 截断后既稳定又更接近真实截止时刻（真实值通常落在整分钟上）
-        dl = (now + parse_remaining(remain_raw)).replace(second=0, microsecond=0) if remain_raw else None
+        # 四舍五入到整分钟（与平台的取整方式一致，可还原真实截止时刻）
+        dl = round_minute(now + parse_remaining(remain_raw)) if remain_raw else None
         works.append({"work_id": wm.group(1), "title": title, "status": status,
                       "remain_raw": remain_raw,
                       "deadline": dl.strftime("%Y-%m-%d %H:%M") if dl else ""})
@@ -183,6 +241,12 @@ def main():
         sys.exit(1)
     if failed:
         print("\n!! 有 %d/%d 门课抓取失败（其余正常）" % (failed, len(courses)))
+
+    hit, upd, new = stabilize(all_works)
+    print("\n截止时刻固化：命中基线 %d 条 / 变更 %d 条 / 新增 %d 条" % (hit, upd, new))
+    for w in all_works:
+        if w["deadline"]:
+            print("   %-42s %s  [%s]" % (w["title"][:42], w["deadline"], w.get("deadline_source", "")))
 
     (BASE / "all_works.json").write_text(
         json.dumps(all_works, ensure_ascii=False, indent=2), encoding="utf-8")
