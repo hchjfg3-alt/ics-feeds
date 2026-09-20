@@ -28,4 +28,24 @@
 ## 凭据
 
 通过 `UCAS_COOKIE` 环境变量注入（GitHub Secrets）。本地调试可放 `.secrets/cookie.txt`。
-Cookie 约每月过期，届时工作流会失败并发出通知，需重新获取。
+
+### Cookie 过期了怎么办（约每月一次）
+
+Cookie 失效时工作流会直接失败退出（日志里能看到「课程列表为空 —— 极可能是 Cookie 已失效」），
+GitHub 会给仓库所有者发失败通知邮件。恢复步骤：
+
+1. 浏览器登录 <https://mooc.ucas.edu.cn/courselist/mycourse>（**先按 F12 → Network → 勾选 Disable cache**，再 Ctrl+Shift+R 硬刷新）
+2. 在 Network 里点名为 `mycourse`（类型 **document**）的请求，复制请求头里的整行 `Cookie: ...`
+   - 若看到「Provisional headers are shown」，说明命中了缓存，重复第 1 步
+3. 更新 Secret：`gh secret set UCAS_COOKIE --repo hchjfg3-alt/ics-feeds`
+4. 手动触发一次：`gh workflow run sync-ucas-homework --repo hchjfg3-alt/ics-feeds`
+
+## 运行时间
+
+每天两次，北京时间 **07:00** 与 **19:00**（Actions 的 cron 用 UTC，故为 `0 23` 与 `0 11`）。
+
+## 维护备忘
+
+- 改动 `.github/workflows/` 下的文件需要 token 带 `workflow` 权限；**用 SSH 推送可绕过**
+  （SSH 密钥没有 scope 概念，`git push git@github.com:...` 直接可写，而 HTTPS/Contents API 会 404）
+- 定时任务若 60 天无仓库活动会被 GitHub 自动停用（Cookie 每月过期通常先于这个触发，可忽略）
