@@ -50,10 +50,13 @@ def build(works, out_path):
             "all_day": False,
             "dt_start": dl.strftime("%Y%m%dT%H%M%S"),
             "dt_end": (dl + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S"),
+            # 一律用【小时】为单位表达时长：实测小米/安卓日历解析不了"天"形式的
+            # `-P3D` / `-P1D`（会被回落成"开始时"），但认得 `-PT3H`。
+            # RFC 5545 里 -P1D 与 -PT24H 完全等价，所以统一写成小时最安全。
             "alarms": [
-                {"relative": "-P3D",
+                {"relative": "-PT72H",
                  "text": "3 天后截止（%s %s）：%s" % (dl.strftime("%m-%d"), dl.strftime("%H:%M"), w["title"])},
-                {"relative": "-P1D",
+                {"relative": "-PT24H",
                  "text": "明天 %s 截止：%s" % (dl.strftime("%H:%M"), w["title"])},
                 {"relative": "-PT3H",
                  "text": "3 小时后截止（%s）：%s" % (dl.strftime("%H:%M"), w["title"])},

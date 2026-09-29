@@ -207,7 +207,7 @@ def main():
                         "dt_end": (dl + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S"),
                         "alarms": [
                             {
-                                "relative": "-P1D",
+                                "relative": "-PT24H",
                                 "text": f"明天 {dl.strftime('%H:%M')} 截止：{w['title']}",
                             },
                             {
